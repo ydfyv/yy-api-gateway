@@ -21,6 +21,7 @@ import reactor.core.publisher.Mono;
 import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 /**
  * @author 阿狸
@@ -59,47 +60,50 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 //                                .filter(StringUtils::isNotBlank).orElse("未登录");
 //                        String ip = IPUtils.getIpAddrByServerHttpRequest(serverHttpRequest);
                         String params = getRequestparams(serverHttpRequest, exchange);
+                        String headers = formatHeaders(serverHttpRequest.getHeaders());
 
                         log.info("{} ========================接口详细日志========================", timestamp);
                         log.info("{} 请求方式：{}  请求路径: {}", timestamp, method, requestUrl);
                         log.info("{} 请求参数: {}", timestamp, params);
+                        log.info("{} 请求头: {}", timestamp, headers);
+
 //                        log.info("{} 用户ID: {}  访问IP: {}  访问时间：{}", timestamp, userId, ip, new Date());
 
-                        // 判断是否需要打印响应
-                        if (isUpdateDate(method, requestUrl)) {
-                            // 创建数据缓冲工厂和缓冲区，用于读取响应内容
-                            DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
-                            DataBuffer buff = dataBufferFactory.join(dataBuffers);
-                            byte[] content = new byte[buff.readableByteCount()];
-                            buff.read(content);
-                            // 释放缓冲区资源
-                            DataBufferUtils.release(buff);
+//                        // 判断是否需要打印响应
+//                        if (isUpdateDate(method, requestUrl)) {
+                        // 创建数据缓冲工厂和缓冲区，用于读取响应内容
+                        DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
+                        DataBuffer buff = dataBufferFactory.join(dataBuffers);
+                        byte[] content = new byte[buff.readableByteCount()];
+                        buff.read(content);
+                        // 释放缓冲区资源
+                        DataBufferUtils.release(buff);
 
-                            // 获取响应内容类型
-                            MediaType contentType = originalResponse.getHeaders().getContentType();
-                            if (!MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
-                                // 如果不是JSON类型，直接返回原始内容，不进行处理
-                                log.info("{} ===============================================================", timestamp);
-                                return bufferFactory.wrap(content);
-                            }
-
-                            // 将字节数组转换为字符串 对响应体进行统一格式化处理
-                            String result = modifyBody(new String(content));
-                            log.info("{} 响应结果: {}", timestamp, result);
+                        // 获取响应内容类型
+                        MediaType contentType = originalResponse.getHeaders().getContentType();
+                        if (!MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
+                            // 如果不是JSON类型，直接返回原始内容，不进行处理
                             log.info("{} ===============================================================", timestamp);
-
-                            getDelegate().getHeaders().setContentLength(result.getBytes().length);
-                            return bufferFactory.wrap(result.getBytes());
-                        } else {
-                            // 不需要打印响应结果时，直接合并并返回原始数据
-                            log.info("{} ===============================================================", timestamp);
-                            DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
-                            DataBuffer joinedBuffer = dataBufferFactory.join(dataBuffers);
-                            byte[] content = new byte[joinedBuffer.readableByteCount()];
-                            joinedBuffer.read(content);
-                            DataBufferUtils.release(joinedBuffer);
                             return bufferFactory.wrap(content);
                         }
+
+                        // 将字节数组转换为字符串 对响应体进行统一格式化处理
+                        String result = new String(content);
+                        log.info("{} 响应结果: {}", timestamp, result);
+                        log.info("{} ===============================================================", timestamp);
+
+                        getDelegate().getHeaders().setContentLength(result.getBytes().length);
+                        return bufferFactory.wrap(result.getBytes());
+//                        } else {
+                        // 不需要打印响应结果时，直接合并并返回原始数据
+//                            log.info("{} ===============================================================", timestamp);
+//                            DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
+//                            DataBuffer joinedBuffer = dataBufferFactory.join(dataBuffers);
+//                            byte[] content = new byte[joinedBuffer.readableByteCount()];
+//                            joinedBuffer.read(content);
+//                            DataBufferUtils.release(joinedBuffer);
+//                            return bufferFactory.wrap(content);
+//                        }
                     }));
                 } else {
                     return super.writeWith(body);
@@ -214,5 +218,16 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 //        return JSONObject.toJSONString(json, (ValueFilter) (object, name, value) ->
 //                value == null ? "" : value, SerializerFeature.WriteDateUseDateFormat);
 //    }
+
+    /**
+     * 格式化请求头
+     * @param headers 请求托
+     * @return 格式化后的请求头
+     */
+    private String formatHeaders(org.springframework.http.HttpHeaders headers) {
+        return headers.entrySet().stream()
+                .map(entry -> entry.getKey() + "=" + String.join(",", entry.getValue()))
+                .collect(Collectors.joining(" | "));
+    }
 
 }
