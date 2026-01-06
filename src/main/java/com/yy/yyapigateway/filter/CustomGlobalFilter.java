@@ -1,6 +1,9 @@
 package com.yy.yyapigateway.filter;
 
+import com.yy.yyapiinterface.api.InnerInterfaceInfoService;
+import com.yy.yyapiinterface.api.InnerUserService;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboReference;
 import org.reactivestreams.Publisher;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
@@ -9,6 +12,7 @@ import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpRequest;
@@ -20,6 +24,10 @@ import reactor.core.publisher.Mono;
 
 import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -30,6 +38,30 @@ import java.util.stream.Collectors;
 @Slf4j
 public class CustomGlobalFilter implements GlobalFilter, Ordered {
 
+//1. 用户发送请求到API网关
+//2. 请求日志
+//3. （黑白名单）
+//4. 用户鉴权（判断ak、sk是否合法）
+//5. 请求的模拟接口是否存在
+//6. 请求转发、调用模拟接口
+//7. 响应日志
+//8. 调用成功、接口调用次数 + 1
+//9. 调用失败，返回一个规范的错误码  TODO
+
+    @DubboReference
+    private InnerUserService innerUserService;
+
+    @DubboReference
+    private InnerInterfaceInfoService innerInterfaceInfoService;
+
+    // 黑白名单
+    private static final List<String> blackList = new ArrayList<>();
+
+    static {
+        blackList.add("12568.5454");
+    }
+
+
     @Override
     public int getOrder() {
         return -20;
@@ -37,6 +69,7 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        // 1. 用户发送请求到API网关
         ServerHttpRequest serverHttpRequest = exchange.getRequest();
         // 获取原始响应对象和数据缓冲工厂
         ServerHttpResponse originalResponse = exchange.getResponse();
@@ -50,7 +83,7 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
             public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
                 if (body instanceof Flux) {
                     Flux<? extends DataBuffer> fluxBody = Flux.from(body);
-
+                    // 2. 请求日志
                     return super.writeWith(fluxBody.buffer().map(dataBuffers -> {
                         // 获取一些需要打印的参数
                         long timestamp = System.currentTimeMillis();
@@ -59,7 +92,7 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 //                        String userId = Optional.ofNullable(serverHttpRequest.getHeaders().getFirst(AuthConstants.USER_ID))
 //                                .filter(StringUtils::isNotBlank).orElse("未登录");
 //                        String ip = IPUtils.getIpAddrByServerHttpRequest(serverHttpRequest);
-                        String params = getRequestparams(serverHttpRequest, exchange);
+                        String params = getRequestParams(serverHttpRequest, exchange);
                         String headers = formatHeaders(serverHttpRequest.getHeaders());
 
                         log.info("{} ========================接口详细日志========================", timestamp);
@@ -87,10 +120,33 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
                             return bufferFactory.wrap(content);
                         }
 
+
+                        //7. 响应日志
                         // 将字节数组转换为字符串 对响应体进行统一格式化处理
                         String result = new String(content);
                         log.info("{} 响应结果: {}", timestamp, result);
                         log.info("{} ===============================================================", timestamp);
+
+                        // 4. 用户鉴权（判断ak、sk是否合法）
+                        Boolean access = validateAccess(serverHttpRequest.getHeaders());
+
+                        if (!access) {
+                            // 抛异常，没有权限
+                        }
+
+                        // 5. 请求的模拟接口是否存在
+                        // TODO backend 提供相应的方法
+                        boolean interfaceAccess = innerInterfaceInfoService.validateInterfaceAccess(requestUrl, String.valueOf(method));
+                        if (!interfaceAccess) {
+                            // 抛异常，接口不可访问
+                        }
+
+                        //8. 调用成功、接口调用次数 + 1 TODO YY API backend 提供相应的方法
+                        Boolean countSuccess = increaseInvokeCount(serverHttpRequest.getHeaders(), requestUrl);
+
+                        if (!countSuccess) {
+                            // 抛异常，计数失败
+                        }
 
                         getDelegate().getHeaders().setContentLength(result.getBytes().length);
                         return bufferFactory.wrap(result.getBytes());
@@ -121,20 +177,6 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
         return serviceUrl.substring(0, serviceUrl.indexOf("/"));
     }
 
-//    /**
-//     * 获取请求token
-//     */
-//    private String getToken(ServerHttpRequest request) {
-//        String token = request.getHeaders().getFirst(jwtProperties.getHeader());
-//        // 如果前端设置了令牌前缀，则裁剪掉前缀
-//        if (StringUtils.isNotEmpty(token) && token.startsWith(TokenConstants.PREFIX)) {
-//            token = token.replaceFirst(TokenConstants.PREFIX, StringUtils.EMPTY);
-//        }
-//        return token;
-//    }
-
-
-
 
     /**
      * 获取去除路由后的path
@@ -149,27 +191,10 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
     }
 
 
-//    /**
-//     * 判断是否为增删改接口  只有增删改接口才会打印响应结果
-//     */
-//    private boolean isUpdateDate(HttpMethod method, String requestUrl){
-//        switch (method) {
-//            case PUT:
-//            case DELETE:
-//                return true;
-//            case GET:
-//                return sysPrintLogService.checkNeedPrint_GET(requestUrl);
-//            case POST:
-//                return sysPrintLogService.checkNeedPrint_POST(requestUrl);
-//            default:
-//                return false;
-//        }
-//    }
-
     /**
      * 获取请求参数
      */
-    private String getRequestparams(ServerHttpRequest serverHttpRequest, ServerWebExchange exchange) {
+    private String getRequestParams(ServerHttpRequest serverHttpRequest, ServerWebExchange exchange) {
         HttpMethod method = serverHttpRequest.getMethod();
 
         // 检查是否为文件上传请求，如果是则不打印参数
@@ -224,10 +249,22 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
      * @param headers 请求托
      * @return 格式化后的请求头
      */
-    private String formatHeaders(org.springframework.http.HttpHeaders headers) {
+    private String formatHeaders(HttpHeaders headers) {
         return headers.entrySet().stream()
                 .map(entry -> entry.getKey() + "=" + String.join(",", entry.getValue()))
                 .collect(Collectors.joining(" | "));
     }
 
+    private Boolean validateAccess(HttpHeaders headers) {
+        String signed = Optional.ofNullable(headers.get("sign")).orElse(new ArrayList<>()).stream().findFirst().orElse("");
+        String accessKey = Optional.ofNullable(headers.get("accessKey")).orElse(new ArrayList<>()).stream().findFirst().orElse("");
+        String body = Optional.ofNullable(headers.get("body")).orElse(new ArrayList<>()).stream().findFirst().orElse("");
+        // TODO: 查找数据库中的secretKey, 用同样的算法进行加密，看结果是否相等
+        return innerUserService.isAccessible(accessKey, body, signed);
+    }
+
+    private Boolean increaseInvokeCount(HttpHeaders headers, String path) {
+        String accessKey = Optional.ofNullable(headers.get("accessKey")).orElse(new ArrayList<>()).stream().findFirst().orElse("");
+        return innerInterfaceInfoService.increaseInvokeCount(accessKey, path);
+    }
 }
