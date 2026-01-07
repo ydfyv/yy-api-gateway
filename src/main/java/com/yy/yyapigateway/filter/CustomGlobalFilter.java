@@ -48,10 +48,10 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 //8. 调用成功、接口调用次数 + 1
 //9. 调用失败，返回一个规范的错误码  TODO
 
-    @DubboReference
+    @DubboReference(check = false)
     private InnerUserService innerUserService;
 
-    @DubboReference
+    @DubboReference(check = false)
     private InnerInterfaceInfoService innerInterfaceInfoService;
 
     // 黑白名单

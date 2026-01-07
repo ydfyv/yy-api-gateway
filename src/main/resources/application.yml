@@ -17,3 +17,5 @@ dubbo:
   registry:
     address: nacos://localhost:8848
     register-mode: instance
+  protocol:
+    port: 20881
