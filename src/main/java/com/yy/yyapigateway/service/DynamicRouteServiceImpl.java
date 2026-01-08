@@ -43,6 +43,22 @@ public class DynamicRouteServiceImpl implements DynamicRouteService {
         // 保存发布
         routeDefinitionWriter.save(Mono.just(routeDefinition)).subscribe();
         // 发布事件
-        applicationEventPublisher.publishEvent(new RefreshRoutesEvent(this));
+        publishEvent(new RefreshRoutesEvent(this));
+    }
+
+    @Override
+    public void deleteRoute(String id) {
+        routeDefinitionWriter.delete(Mono.just(id)).subscribe();
+        publishEvent(new RefreshRoutesEvent(this));
+    }
+
+    @Override
+    public void updateRoute(String id, String pathName) {
+        deleteRoute(id);
+        addRoute(pathName);
+    }
+
+    private void publishEvent(RefreshRoutesEvent event) {
+        applicationEventPublisher.publishEvent(event);
     }
 }
