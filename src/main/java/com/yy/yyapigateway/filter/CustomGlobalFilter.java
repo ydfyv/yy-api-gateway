@@ -1,42 +1,30 @@
+/**
+ * @author 阿狸
+ * @date 2026/1/16
+ */
 package com.yy.yyapigateway.filter;
 
 import com.yy.yyapiinterface.api.InnerInterfaceInfoService;
 import com.yy.yyapiinterface.api.InnerUserService;
+import com.yy.yyapimodel.utils.SignUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.dubbo.config.annotation.DubboReference;
-import org.reactivestreams.Publisher;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
-import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.DataBufferFactory;
-import org.springframework.core.io.buffer.DataBufferUtils;
-import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
-import org.springframework.http.server.reactive.ServerHttpResponseDecorator;
+import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.nio.CharBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
-/**
- * @author 阿狸
- * @date 2026-01-04
- */
-@Slf4j
-public class CustomGlobalFilter implements GlobalFilter, Ordered {
 
 //1. 用户发送请求到API网关
 //2. 请求日志
@@ -46,7 +34,11 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 //6. 请求转发、调用模拟接口
 //7. 响应日志
 //8. 调用成功、接口调用次数 + 1
-//9. 调用失败，返回一个规范的错误码  TODO
+//9. 调用失败，返回一个规范的错误码
+
+@Slf4j
+@Component
+public class CustomGlobalFilter implements GlobalFilter, Ordered {
 
     @DubboReference(check = false)
     private InnerUserService innerUserService;
@@ -54,217 +46,143 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
     @DubboReference(check = false)
     private InnerInterfaceInfoService innerInterfaceInfoService;
 
-    // 黑白名单
     private static final List<String> blackList = new ArrayList<>();
+    public static final List<Pattern> whitePathList = new ArrayList<>();
 
     static {
         blackList.add("12568.5454");
+        whitePathList.add(Pattern.compile("^/api(/.*)?$"));
     }
-
 
     @Override
     public int getOrder() {
-        return -20;
+        return -20; // 在路由前执行
     }
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        // 1. 用户发送请求到API网关
-        ServerHttpRequest serverHttpRequest = exchange.getRequest();
-        // 获取原始响应对象和数据缓冲工厂
-        ServerHttpResponse originalResponse = exchange.getResponse();
-        DataBufferFactory bufferFactory = originalResponse.bufferFactory();
-        // 原始响应对象，用于拦截和修改响应内容
-        ServerHttpResponseDecorator decoratedResponse = new ServerHttpResponseDecorator(originalResponse) {
-            /**
-             * 重写writeWith方法拦截响应体
-             */
-            @Override
-            public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
-                if (body instanceof Flux) {
-                    Flux<? extends DataBuffer> fluxBody = Flux.from(body);
-                    // 2. 请求日志
-                    return super.writeWith(fluxBody.buffer().map(dataBuffers -> {
-                        // 获取一些需要打印的参数
-                        long timestamp = System.currentTimeMillis();
-                        HttpMethod method = serverHttpRequest.getMethod();
-                        String requestUrl = serverHttpRequest.getPath().toString();
-//                        String userId = Optional.ofNullable(serverHttpRequest.getHeaders().getFirst(AuthConstants.USER_ID))
-//                                .filter(StringUtils::isNotBlank).orElse("未登录");
-//                        String ip = IPUtils.getIpAddrByServerHttpRequest(serverHttpRequest);
-                        String params = getRequestParams(serverHttpRequest, exchange);
-                        String headers = formatHeaders(serverHttpRequest.getHeaders());
+        ServerHttpRequest request = exchange.getRequest();
+        String path = request.getPath().toString();
 
-                        log.info("{} ========================接口详细日志========================", timestamp);
-                        log.info("{} 请求方式：{}  请求路径: {}", timestamp, method, requestUrl);
-                        log.info("{} 请求参数: {}", timestamp, params);
-                        log.info("{} 请求头: {}", timestamp, headers);
+        // === 第一步：黑白名单（示例：黑名单IP拦截，此处略）===
 
-//                        log.info("{} 用户ID: {}  访问IP: {}  访问时间：{}", timestamp, userId, ip, new Date());
-
-//                        // 判断是否需要打印响应
-//                        if (isUpdateDate(method, requestUrl)) {
-                        // 创建数据缓冲工厂和缓冲区，用于读取响应内容
-                        DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
-                        DataBuffer buff = dataBufferFactory.join(dataBuffers);
-                        byte[] content = new byte[buff.readableByteCount()];
-                        buff.read(content);
-                        // 释放缓冲区资源
-                        DataBufferUtils.release(buff);
-
-                        // 获取响应内容类型
-                        MediaType contentType = originalResponse.getHeaders().getContentType();
-                        if (!MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
-                            // 如果不是JSON类型，直接返回原始内容，不进行处理
-                            log.info("{} ===============================================================", timestamp);
-                            return bufferFactory.wrap(content);
-                        }
-
-
-                        //7. 响应日志
-                        // 将字节数组转换为字符串 对响应体进行统一格式化处理
-                        String result = new String(content);
-                        log.info("{} 响应结果: {}", timestamp, result);
-                        log.info("{} ===============================================================", timestamp);
-
-                        // 4. 用户鉴权（判断ak、sk是否合法）
-                        Boolean access = validateAccess(serverHttpRequest.getHeaders());
-
-                        if (!access) {
-                            // 抛异常，没有权限
-                        }
-
-                        // 5. 请求的模拟接口是否存在
-                        // TODO backend 提供相应的方法
-                        boolean interfaceAccess = innerInterfaceInfoService.validateInterfaceAccess(requestUrl, String.valueOf(method));
-                        if (!interfaceAccess) {
-                            // 抛异常，接口不可访问
-                        }
-
-                        //8. 调用成功、接口调用次数 + 1 TODO YY API backend 提供相应的方法
-                        Boolean countSuccess = increaseInvokeCount(serverHttpRequest.getHeaders(), requestUrl);
-
-                        if (!countSuccess) {
-                            // 抛异常，计数失败
-                        }
-
-                        getDelegate().getHeaders().setContentLength(result.getBytes().length);
-                        return bufferFactory.wrap(result.getBytes());
-//                        } else {
-                        // 不需要打印响应结果时，直接合并并返回原始数据
-//                            log.info("{} ===============================================================", timestamp);
-//                            DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
-//                            DataBuffer joinedBuffer = dataBufferFactory.join(dataBuffers);
-//                            byte[] content = new byte[joinedBuffer.readableByteCount()];
-//                            joinedBuffer.read(content);
-//                            DataBufferUtils.release(joinedBuffer);
-//                            return bufferFactory.wrap(content);
-//                        }
-                    }));
-                } else {
-                    return super.writeWith(body);
-                }
-            }
-        };
-
-        return chain.filter(exchange.mutate().response(decoratedResponse).build());
-    }
-
-
-    private static String getRouteName(String requestUrl) {
-        String serviceUrl = requestUrl.substring(requestUrl.indexOf("/") + 1);
-        log.info("getRouteName: " + serviceUrl.substring(0, serviceUrl.indexOf("/")));
-        return serviceUrl.substring(0, serviceUrl.indexOf("/"));
-    }
-
-
-    /**
-     * 获取去除路由后的path
-     *
-     * @param requestUrl
-     * @return
-     */
-    private static String getPath(String requestUrl) {
-        String path = requestUrl.substring(1);
-        log.info("getPath: " + path.substring(path.indexOf("/")));
-        return path.substring(path.indexOf("/"));
-    }
-
-
-    /**
-     * 获取请求参数
-     */
-    private String getRequestParams(ServerHttpRequest serverHttpRequest, ServerWebExchange exchange) {
-        HttpMethod method = serverHttpRequest.getMethod();
-
-        // 检查是否为文件上传请求，如果是则不打印参数
-        MediaType contentType = serverHttpRequest.getHeaders().getContentType();
-        if (contentType != null && (contentType.includes(MediaType.MULTIPART_FORM_DATA)
-                || contentType.includes(MediaType.APPLICATION_OCTET_STREAM))) {
-            return "";
+        // === 第二步：判断是否需要处理（比如只处理 /api 开头的）===
+        boolean isApiRequest = whitePathList.stream().anyMatch(p -> p.matcher(path).matches());
+        if (isApiRequest) {
+            return chain.filter(exchange); // 非API请求直接放行
         }
 
-        if (HttpMethod.GET.equals(method) || HttpMethod.DELETE.equals(method)) {
-            StringBuilder params = new StringBuilder();
-            serverHttpRequest.getQueryParams().forEach((key, value) -> {
-                value.forEach(v -> params.append(key).append("=").append(v).append("&"));
-            });
-            // 移除末尾的 "&"
-            if (params.length() > 0) {
-                params.deleteCharAt(params.length() - 1);
+        // === 第三步：【请求染色】从 Cookie 提取值，注入 Header ===
+        ServerHttpRequest mutatedRequest = addCookieToHeader(request);
+
+        try {
+            // === 第四步：获取关键 Header 用于鉴权 ===
+            HttpHeaders headers = mutatedRequest.getHeaders();
+            String accessKey = getFirstHeader(headers, "accessKey");
+            String body = getFirstHeader(headers, "X-Request-Body");
+
+            String secretKey = innerUserService.getSecretKey(accessKey);
+            String sign = SignUtils.sign(secretKey, body);
+
+            // === 第五步：用户鉴权 ===
+            if (!validateAccess(accessKey, body, sign)) {
+                return unauthorized(exchange, "无效的 accessKey 或签名");
             }
-            return params.toString();
-        } else if (HttpMethod.POST.equals(method) || HttpMethod.PUT.equals(method)) {
-            return getBodyContent(exchange);
+
+            // === 第六步：接口是否存在 ===
+            HttpMethod method = mutatedRequest.getMethod();
+            if (!innerInterfaceInfoService.validateInterfaceAccess(path, String.valueOf(method))) {
+                return forbidden(exchange, "接口不存在或不可访问");
+            }
+
+            // === 第七步：调用次数 +1（异步，不影响主流程）===
+            increaseInvokeCountAsync(accessKey, path);
+
+            // === 第八步：记录请求日志（可选）===
+            logRequest(mutatedRequest, path);
+
+        } catch (Exception e) {
+            return writeErrorResponse(exchange, 500, e.getMessage());
         }
-        return "";
+        // 继续链路（使用染色后的请求）
+        return chain.filter(exchange.mutate().request(mutatedRequest).build());
     }
 
-    // 从其他filter中copy过来的 目的是获取post请求的body
-    private String getBodyContent(ServerWebExchange exchange){
-        Flux<DataBuffer> body = exchange.getRequest().getBody();
-        AtomicReference<String> bodyRef = new AtomicReference<>();
-        // 缓存读取的request body信息
-        body.subscribe(dataBuffer -> {
-            CharBuffer charBuffer = StandardCharsets.UTF_8.decode(dataBuffer.asByteBuffer());
-            DataBufferUtils.release(dataBuffer);
-            bodyRef.set(charBuffer.toString());
-        });
-        //获取request body
-        return bodyRef.get();
+    // 👇 核心：Cookie 染色
+    private ServerHttpRequest addCookieToHeader(ServerHttpRequest request) {
+        // 示例：从 Cookie 中提取 JSESSIONID，放入 X-Session-ID
+        String sessionId = Optional.ofNullable(request.getCookies().getFirst("JSESSIONID"))
+                .map(cookie -> cookie.getValue())
+                .orElse("");
+
+        // 也可以提取其他 Cookie，如 user_id
+        String userId = Optional.ofNullable(request.getCookies().getFirst("user_id"))
+                .map(cookie -> cookie.getValue())
+                .orElse("");
+
+        ServerHttpRequest.Builder builder = request.mutate();
+
+        if (!sessionId.isEmpty()) {
+            builder.header("X-Session-ID", sessionId);
+        }
+        if (!userId.isEmpty()) {
+            builder.header("X-User-ID", userId);
+        }
+
+        return builder.build();
     }
 
-    /**
-     * 修改响应体内容，统一JSON数据格式
-     */
-//    private String modifyBody(String str){
-//        JSONObject json = JSON.parseObject(str, Feature.AllowISO8601DateFormat);
-//        JSONObject.DEFFAULT_DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
-//        return JSONObject.toJSONString(json, (ValueFilter) (object, name, value) ->
-//                value == null ? "" : value, SerializerFeature.WriteDateUseDateFormat);
-//    }
-
-    /**
-     * 格式化请求头
-     * @param headers 请求托
-     * @return 格式化后的请求头
-     */
-    private String formatHeaders(HttpHeaders headers) {
-        return headers.entrySet().stream()
-                .map(entry -> entry.getKey() + "=" + String.join(",", entry.getValue()))
-                .collect(Collectors.joining(" | "));
+    private String getFirstHeader(HttpHeaders headers, String name) {
+        return Optional.ofNullable(headers.getFirst(name)).orElse("");
     }
 
-    private Boolean validateAccess(HttpHeaders headers) {
-        String signed = Optional.ofNullable(headers.get("sign")).orElse(new ArrayList<>()).stream().findFirst().orElse("");
-        String accessKey = Optional.ofNullable(headers.get("accessKey")).orElse(new ArrayList<>()).stream().findFirst().orElse("");
-        String body = Optional.ofNullable(headers.get("body")).orElse(new ArrayList<>()).stream().findFirst().orElse("");
-        // TODO: 查找数据库中的secretKey, 用同样的算法进行加密，看结果是否相等
+    private boolean validateAccess(String accessKey, String body, String signed) {
+        if (accessKey.isEmpty()) {
+            return false;
+        }
+        // 注意：这里不要传整个 body（避免重复读），可考虑用请求路径+方法+时间戳等生成签名
+        // 如果必须用 body，需提前缓存（复杂，建议改用 header 签名）
         return innerUserService.isAccessible(accessKey, body, signed);
     }
 
-    private Boolean increaseInvokeCount(HttpHeaders headers, String path) {
-        String accessKey = Optional.ofNullable(headers.get("accessKey")).orElse(new ArrayList<>()).stream().findFirst().orElse("");
-        return innerInterfaceInfoService.increaseInvokeCount(accessKey, path);
+    private void increaseInvokeCountAsync(String accessKey, String path) {
+        innerInterfaceInfoService.increaseInvokeCount(accessKey, path);
+    }
+
+    private void logRequest(ServerHttpRequest request, String path) {
+        String method = request.getMethodValue();
+        String params = getQueryParams(request);
+        String headers = formatHeaders(request.getHeaders());
+        log.info("[GATEWAY] 请求: {} {} | Params: {} | Headers: {}", method, path, params, headers);
+    }
+
+    private String getQueryParams(ServerHttpRequest request) {
+        return request.getQueryParams().entrySet().stream()
+                .flatMap(entry -> entry.getValue().stream().map(v -> entry.getKey() + "=" + v))
+                .collect(Collectors.joining("&"));
+    }
+
+    private String formatHeaders(HttpHeaders headers) {
+        return headers.entrySet().stream()
+                .map(e -> e.getKey() + "=" + String.join(",", e.getValue()))
+                .collect(Collectors.joining(" | "));
+    }
+
+    // 返回 401
+    private Mono<Void> unauthorized(ServerWebExchange exchange, String message) {
+        return writeErrorResponse(exchange, 401, message);
+    }
+
+    // 返回 403
+    private Mono<Void> forbidden(ServerWebExchange exchange, String message) {
+        return writeErrorResponse(exchange, 403, message);
+    }
+
+    private Mono<Void> writeErrorResponse(ServerWebExchange exchange, int status, String message) {
+        ServerHttpResponse response = exchange.getResponse();
+        response.setStatusCode(org.springframework.http.HttpStatus.valueOf(status));
+        response.getHeaders().add("Content-Type", "application/json;charset=UTF-8");
+        byte[] bytes = ("{\"code\":" + status + ",\"message\":\"" + message + "\"}").getBytes();
+        return response.writeWith(Mono.just(response.bufferFactory().wrap(bytes)));
     }
 }
