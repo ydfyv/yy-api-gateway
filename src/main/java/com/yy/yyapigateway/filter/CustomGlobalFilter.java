@@ -79,21 +79,21 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
             // === 第四步：获取关键 Header 用于鉴权 ===
             HttpHeaders headers = mutatedRequest.getHeaders();
             String accessKey = getFirstHeader(headers, "accessKey");
-            String body = getFirstHeader(headers, "X-Request-Body");
-
-            String secretKey = innerUserService.getSecretKey(accessKey);
-            String sign = SignUtils.sign(secretKey, body);
-
-            // === 第五步：用户鉴权 ===
-            if (!validateAccess(accessKey, body, sign)) {
-                return unauthorized(exchange, "无效的 accessKey 或签名");
-            }
 
             // === 第六步：接口是否存在 ===
             HttpMethod method = mutatedRequest.getMethod();
             if (!innerInterfaceInfoService.validateInterfaceAccess(path, String.valueOf(method))) {
                 return forbidden(exchange, "接口不存在或不可访问");
             }
+
+            String secretKey = innerUserService.getSecretKey(accessKey);
+            String sign = SignUtils.sign(secretKey, path, String.valueOf(method));
+
+            // === 第五步：用户鉴权 ===
+            if (!validateAccess(accessKey, path, String.valueOf(method), sign)) {
+                return unauthorized(exchange, "无效的 accessKey 或签名");
+            }
+
 
             // === 第七步：调用次数 +1（异步，不影响主流程）===
             increaseInvokeCountAsync(accessKey, path);
@@ -136,13 +136,13 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
         return Optional.ofNullable(headers.getFirst(name)).orElse("");
     }
 
-    private boolean validateAccess(String accessKey, String body, String signed) {
+    private boolean validateAccess(String accessKey, String path, String method, String signed) {
         if (accessKey.isEmpty()) {
             return false;
         }
         // 注意：这里不要传整个 body（避免重复读），可考虑用请求路径+方法+时间戳等生成签名
         // 如果必须用 body，需提前缓存（复杂，建议改用 header 签名）
-        return innerUserService.isAccessible(accessKey, body, signed);
+        return innerUserService.isAccessible(accessKey, path, method, signed);
     }
 
     private void increaseInvokeCountAsync(String accessKey, String path) {

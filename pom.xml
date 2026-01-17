@@ -47,9 +47,9 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>com.yy</groupId>
+            <groupId>io.github.ydfyv</groupId>
             <artifactId>yy-api-common</artifactId>
-            <version>1.0</version>
+            <version>0.0.2</version>
         </dependency>
     </dependencies>
     <dependencyManagement>
