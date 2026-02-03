@@ -129,6 +129,9 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
             builder.header("X-User-ID", userId);
         }
 
+        // 流量染色
+        builder.header("auth", "yy-api-gateway-secret");
+
         return builder.build();
     }
 
