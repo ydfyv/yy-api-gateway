@@ -4,6 +4,7 @@ import com.yy.yyapiinterface.api.DynamicRouteService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.dubbo.config.annotation.DubboService;
 import org.springframework.cloud.gateway.event.RefreshRoutesEvent;
+import org.springframework.cloud.gateway.filter.FilterDefinition;
 import org.springframework.cloud.gateway.handler.predicate.PredicateDefinition;
 import org.springframework.cloud.gateway.route.InMemoryRouteDefinitionRepository;
 import org.springframework.cloud.gateway.route.RouteDefinition;
@@ -45,6 +46,11 @@ public class DynamicRouteServiceImpl implements DynamicRouteService {
         predicateDefinition.addArg("pattern", patternPath + "/**");
 
         routeDefinition.getPredicates().add(predicateDefinition);
+
+        FilterDefinition stripPrefixFilter = new FilterDefinition();
+        stripPrefixFilter.setName("StripPrefix");
+        stripPrefixFilter.addArg("_genkey_0", "1"); // 参数名必须是 _genkey_0, _genkey_1... 或使用索引方式
+        routeDefinition.getFilters().add(stripPrefixFilter);
 
         // 保存发布
         routeDefinitionWriter.save(Mono.just(routeDefinition)).subscribe();
